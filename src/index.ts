@@ -14,9 +14,14 @@ interface GitHubIssue {
 }
 
 interface TodoistTask {
-	id: number;
+	id: string;
 	content: string;
 	description?: string;
+}
+
+interface TodoistTasksResponse {
+	results: TodoistTask[];
+	next_cursor: string | null;
 }
 
 // Fetch GitHub issues using the GitHub Search Issues API
@@ -39,23 +44,36 @@ async function fetchGitHubIssues(githubToken: string): Promise<GitHubIssue[]> {
 	return data as GitHubIssue[];
 }
 
-// Retrieve all active Todoist tasks using the Todoist REST API
+// Retrieve all active Todoist tasks using the Todoist API v1
 async function getTodoistTasks(todoistToken: string): Promise<TodoistTask[]> {
-	const url = "https://api.todoist.com/rest/v2/tasks";
-	const response = await fetch(url, {
-		method: "GET",
-		headers: {
-			Authorization: `Bearer ${todoistToken}`,
-			"User-Agent": "gh-to-todoist-Worker"
-		},
-	});
+	const allTasks: TodoistTask[] = [];
+	let cursor: string | null = null;
 
-	if (!response.ok) {
-		throw new Error(`Todoist API error: ${response.status} ${response.statusText}`);
-	}
+	do {
+		const url = new URL("https://api.todoist.com/api/v1/tasks");
+		url.searchParams.set("limit", "200");
+		if (cursor) {
+			url.searchParams.set("cursor", cursor);
+		}
 
-	const data = await response.json();
-	return data as TodoistTask[];
+		const response = await fetch(url.toString(), {
+			method: "GET",
+			headers: {
+				Authorization: `Bearer ${todoistToken}`,
+				"User-Agent": "gh-to-todoist-Worker"
+			},
+		});
+
+		if (!response.ok) {
+			throw new Error(`Todoist API error: ${response.status} ${response.statusText}`);
+		}
+
+		const data = await response.json() as TodoistTasksResponse;
+		allTasks.push(...data.results);
+		cursor = data.next_cursor;
+	} while (cursor);
+
+	return allTasks;
 }
 
 // Check if a Todoist task already exists for the given GitHub issue
@@ -65,7 +83,7 @@ function taskExistsForIssue(issue: GitHubIssue, tasks: TodoistTask[]): boolean {
 
 // Create a new Todoist task for the given GitHub issue
 async function createTodoistTask(issue: GitHubIssue, todoistToken: string): Promise<void> {
-	const url = "https://api.todoist.com/rest/v2/tasks";
+	const url = "https://api.todoist.com/api/v1/tasks";
 	const taskData = {
 		content: issue.title,
 		description: `GitHub Issue: ${issue.html_url}\n\n${issue.body || ""}`,
